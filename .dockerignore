@@ -1,0 +1,13 @@
+# Gateway image build context (repo root).
+.git
+.gitignore
+bin/
+models/
+engine-py/
+deployments/
+docs/
+context/
+scripts/
+tmp/
+*.log
+__pycache__/

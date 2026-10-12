@@ -1,0 +1,22 @@
+# build artifacts
+/bin/
+
+# secrets
+deployments/.env
+*.env
+!deployments/.env.example
+
+# model weights (downloaded on the VPS, never committed)
+/models/*.gguf
+/models/*.bin
+
+# Python video engine
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+/models/hf/
+
+# local logs and scratch
+*.log
+/tmp/

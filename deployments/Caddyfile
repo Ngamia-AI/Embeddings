@@ -1,0 +1,62 @@
+# Caddy reverse proxy for the embeddings service.
+#
+# Publishes 80/443, obtains and renews a Let's Encrypt certificate for $DOMAIN
+# automatically, and proxies to the gateway over the internal compose network.
+# The gateway is never exposed publicly.
+#
+# Env (set in deployments/.env):
+#   DOMAIN             public hostname (default embeddings.ngamia.cc)
+#   ACME_EMAIL         contact for Let's Encrypt
+#   MAX_BODY_BYTES     request body cap in bytes (default 25000000 ~ 25MB)
+#   ADMIN_ALLOW_CIDRS  space-separated CIDRs allowed to reach /admin/*
+{
+	email {$ACME_EMAIL:admin@ngamia.cc}
+	admin off
+}
+
+{$DOMAIN:embeddings.ngamia.cc} {
+	encode zstd gzip
+
+	request_body {
+		max_size {$MAX_BODY_BYTES:25000000}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Metrics are never public.
+	@metrics path /metrics
+	handle @metrics {
+		respond 404
+	}
+
+	# Admin control plane: only from the allow-listed CIDRs.
+	@admin path /admin/*
+	handle @admin {
+		@allowed remote_ip {$ADMIN_ALLOW_CIDRS:127.0.0.1/32}
+		handle @allowed {
+			reverse_proxy gateway:8090
+		}
+		respond 403
+	}
+
+	# Everything else goes to the gateway.
+	handle {
+		reverse_proxy gateway:8090 {
+			transport http {
+				read_timeout 180s
+				write_timeout 180s
+			}
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

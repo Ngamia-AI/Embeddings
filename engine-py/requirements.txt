@@ -1,0 +1,10 @@
+# Python video engine dependencies (CPU only).
+#
+# torch is installed from the CPU wheel index in the Dockerfile; it is pinned
+# loosely here so the workspace can install the same set locally on any device.
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+sentence-transformers>=3.0,<6.0
+torch>=2.2
+Pillow>=10.0
+numpy>=1.26,<3.0

@@ -1,0 +1,162 @@
+# Embeddings service deployment (postgres + llama.cpp engine + gateway + Caddy).
+#
+# One-command deploy from the repo root:
+#   cd deployments && cp .env.example .env && $EDITOR .env
+#   cd .. && ./scripts/deploy.sh
+#
+# Or step by step:
+#   make models          # downloads + verifies the GGUF files into ./models
+#   make up              # builds and starts everything, Caddy gets TLS
+#
+# Caddy publishes 80/443 and terminates TLS for $DOMAIN automatically. The
+# gateway is only on loopback for local smoke tests; nothing else is public.
+# The optional Python video engine runs with: docker compose --profile video up -d
+
+name: embeddings
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-embeddings}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-embeddings}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embeddings} -d ${POSTGRES_DB:-embeddings}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+
+  embed:
+    image: ${LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/usr/local/bin/verify-and-run.sh"]
+    command:
+      - -m
+      - /models/${TEXT_MODEL:-embeddinggemma-2-BF16.gguf}
+      - --mmproj
+      - /models/${MMPROJ:-mmproj-embeddinggemma-2-BF16.gguf}
+      - --embeddings
+      - --pooling
+      - mean
+      - -c
+      - "${CONTEXT_SIZE:-8192}"
+      - -np
+      - "${ENGINE_SLOTS:-2}"
+      - -b
+      - "${BATCH_SIZE:-4096}"
+      - -ub
+      - "${BATCH_SIZE:-4096}"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    volumes:
+      - ${MODELS_DIR:-../models}:/models:ro
+      - ./engine-entrypoint.sh:/usr/local/bin/verify-and-run.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    mem_limit: 3g
+    # No ports: reachable only inside the compose network.
+
+
+  # Phase 8, Path B: Python video engine. Off by default; enable with
+  #   docker compose --profile video up -d
+  # and set VIDEO_ENABLED=true for the gateway. Memory-capped and only joined to
+  # the compose network.
+  embed-py:
+    build:
+      context: ../engine-py
+    profiles: ["video"]
+    restart: unless-stopped
+    environment:
+      MODEL_ID: "${EMBED_PY_MODEL:-google/embeddinggemma-2}"
+      HF_HOME: /models/hf
+      FRAMES_PER_SECOND: "${VIDEO_FRAMES_PER_SECOND:-1}"
+      MAX_VIDEO_SECONDS: "${VIDEO_MAX_SECONDS:-58}"
+      BF16: "${EMBED_PY_BF16:-false}"
+      BATCH_SIZE: "${EMBED_PY_BATCH_SIZE:-4}"
+      TORCH_THREADS: "${EMBED_PY_THREADS:-0}"
+    volumes:
+      - hfmodels:/models/hf
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+    mem_limit: 3g
+    # No ports: reachable only inside the compose network.
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embed:
+        condition: service_started
+    environment:
+      PORT: "8090"
+      DATABASE_URL: postgres://${POSTGRES_USER:-embeddings}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-embeddings}?sslmode=disable
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      ENGINE_URL: http://embed:8080
+      ENGINE_SLOTS: "${ENGINE_SLOTS:-2}"
+      MEDIA_CONCURRENCY: "${MEDIA_CONCURRENCY:-1}"
+      MAX_ITEM_TOKENS: "${MAX_ITEM_TOKENS:-4096}"
+      MAX_BODY_BYTES: "${MAX_BODY_BYTES:-26214400}"
+      MEDIA_BYTES_BUDGET: "${MEDIA_BYTES_BUDGET:-134217728}"
+      VIDEO_ENABLED: "${VIDEO_ENABLED:-false}"
+      VIDEO_ENGINE_URL: http://embed-py:8080
+      VIDEO_TIMEOUT: "${VIDEO_TIMEOUT:-300s}"
+      VIDEO_MAX_BYTES: "${VIDEO_MAX_BYTES:-67108864}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    # Loopback only, for local smoke tests / debugging. Public traffic arrives
+    # through Caddy, which talks to the gateway on the compose network.
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8090}:8090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_started
+    environment:
+      DOMAIN: "${DOMAIN:-embeddings.ngamia.cc}"
+      ACME_EMAIL: "${ACME_EMAIL:-admin@ngamia.cc}"
+      MAX_BODY_BYTES: "${MAX_BODY_BYTES:-26214400}"
+      ADMIN_ALLOW_CIDRS: "${ADMIN_ALLOW_CIDRS:-127.0.0.1/32}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+
+volumes:
+  pgdata:
+  hfmodels:
+  caddy_data:
+  caddy_config:

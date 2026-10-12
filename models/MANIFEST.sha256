@@ -1,0 +1,19 @@
+# EmbeddingGemma 2 model manifest.
+#
+# The GGUF files are NOT stored in git. They are downloaded on the VPS with
+#   make models
+# which also rewrites this file with the real SHA-256 sums.
+#
+# The `embed` container verifies every listed file before starting llama-server
+# and refuses to start on a mismatch (see deployments/engine-entrypoint.sh).
+#
+# Expected files (BF16 set, per the SRS):
+#   embeddinggemma-2-BF16.gguf          ggml-org/embeddinggemma-2-GGUF   (558 MB)
+#   mmproj-embeddinggemma-2-BF16.gguf   AtomicChat/embeddinggemma-2-GGUF (982 MB)
+#
+# Optional Q8_0 fallback pair (Phase 0 comparison):
+#   embeddinggemma-2-Q8_0.gguf          ggml-org/embeddinggemma-2-GGUF   (310 MB)
+#   mmproj-embeddinggemma-2-Q8_0.gguf   AtomicChat/embeddinggemma-2-GGUF (555 MB)
+#
+# Format: <sha256>  <filename>
+# Run `make manifest` after downloading to populate hashes.

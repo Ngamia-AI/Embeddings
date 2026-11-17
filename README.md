@@ -1,4 +1,4 @@
-# Embeddings Service (embeddings.ngamia.cc)
+# Embeddings Service 
 
 Self-hosted multimodal embeddings gateway for the Camel Creatives ecosystem. It
 runs the full **EmbeddingGemma 2** model (text, image, audio; video behind a
